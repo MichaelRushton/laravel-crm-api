@@ -1,0 +1,96 @@
+#!/bin/bash
+
+set -e
+
+install()
+{
+
+  if [ -f .env ]; then
+
+    source .env
+
+    if [ "production" == $APP_ENV ]; then
+      echo $'\e[31mINSTALL CANCELLED. THIS IS THE PRODUCTION ENVIRONMENT.\e[0m'
+      exit 1
+    fi
+
+    read -p $'\e[33mThe app has already been installed. Would you like to re-install it? y/N\e[0m' -n 1 -r
+
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+      echo
+      exit 0
+    fi
+
+  fi
+
+  cp .env.example .env
+  start
+  exec composer install
+  exec php artisan key:generate
+
+  until [ "`docker inspect -f {{.State.Health.Status}} laravel-crm-api-db`" == "healthy" ]; do
+    sleep 1;
+  done;
+
+  exec php artisan migrate:fresh --seed
+
+}
+
+start()
+{
+  export uid=$(id -u)
+  export gid=$(id -g)
+  docker compose -f docker/docker-compose.yml --env-file .env up -d
+}
+
+stop()
+{
+  docker compose -f docker/docker-compose.yml --env-file .env stop
+}
+
+exec()
+{
+  command=$@
+  docker exec -it laravel-crm-api-app sh -c "$command"
+}
+
+help()
+{
+  echo $'\e[33mAvailable commands:\e[0m'
+  echo $'\e[32minstall\e[0m             Install the app'
+  echo $'\e[32mstart\e[0m               Start the Docker containers'
+  echo $'\e[32mstop\e[0m                Stop the Docker containers'
+  echo $'\e[32mcomposer [command]\e[0m  Run a composer command in the Docker container'
+  echo $'\e[32mphp [command]\e[0m       Run a php command in the Docker container'
+  echo $'\e[32martisan [command]\e[0m   Run an artisan command in the Docker container'
+  echo $'\e[32mmigrate\e[0m             Run migrations in the Docker container'
+  echo $'\e[32mtest\e[0m                Run tests in the Docker container'
+  echo $'\e[32mvendor [executable]\e[0m Run a vendor/bin executable in the Docker container'
+}
+
+case "$1" in
+  install)
+    install
+    ;;
+  start)
+    start
+    ;;
+  stop)
+    stop
+    ;;
+  composer | php)
+    exec ${@:1}
+    ;;
+  artisan)
+    exec php ${@:1}
+    ;;
+  migrate* | test)
+    exec php artisan ${@:1}
+    ;;
+  vendor)
+    exec vendor/bin/${@:2}
+    ;;
+  *)
+    help
+    ;;
+esac
