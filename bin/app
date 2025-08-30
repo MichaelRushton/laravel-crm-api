@@ -1,0 +1,142 @@
+#!/bin/bash
+
+set -e
+
+help()
+{
+  echo $'\e[33mAvailable commands:\e[0m'
+  echo $'\e[32mhelp\e[0m                List available commands'
+  echo $'\e[32minstall\e[0m             Install the app'
+  echo $'\e[32mstart\e[0m               Start the Docker containers'
+  echo $'\e[32mstop\e[0m                Stop the Docker containers'
+  echo $'\e[32mdev\e[0m                 Clear cache and watch for changes'
+  echo $'\e[32mformat\e[0m              Run Prettier and Laravel Pint'
+  echo $'\e[32mcomposer [command]\e[0m  Run a composer command'
+  echo $'\e[32mnpm [command]\e[0m       Run an npm command'
+  echo $'\e[32mphp [command]\e[0m       Run a php command'
+  echo $'\e[32mvendor [executable]\e[0m Run a vendor/bin executable'
+  echo $'\e[32mtest [options]\e[0m      Run feature and unit tests'
+  echo $'\e[32martisan [command]\e[0m   Run an artisan command'
+  echo $'\e[32m[command]\e[0m           Run an artisan command (shorthand)'
+}
+
+install()
+{
+
+  if [ -f .env ]; then
+
+    source .env
+
+    if [ "production" == $APP_ENV ]; then
+      echo $'\e[31mINSTALL CANCELLED. THIS IS THE PRODUCTION ENVIRONMENT.\e[0m'
+      exit 1
+    fi
+
+    read -p $'\e[33mThe app has already been installed. Would you like to re-install it? y/N\e[0m' -n 1 -r
+
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+      echo
+      exit 0
+    fi
+
+  fi
+
+  cp .env.example .env
+  start
+  composer install
+  exec php artisan key:generate
+  npm i
+  npm run build
+
+  until [ "`docker inspect -f {{.State.Health.Status}} laravel-crm-api-db`" == "healthy" ]; do
+    sleep 1;
+  done;
+
+  exec php artisan migrate:fresh
+
+}
+
+start()
+{
+  export uid=$(id -u)
+  export gid=$(id -g)
+  docker compose -f docker/docker-compose.yml --env-file .env up -d
+}
+
+stop()
+{
+  docker compose -f docker/docker-compose.yml --env-file .env stop
+}
+
+dev()
+{
+  exec php artisan optimize:clear
+  NODE_ENV=development npm run dev
+}
+
+format()
+{
+  npm run prettier
+  exec php vendor/bin/pint
+}
+
+composer()
+{
+  command=$@
+  docker run --rm -it -v "$(pwd):/app" -u $(id -u):$(id -g) composer/composer sh -c "composer $command"
+}
+
+npm()
+{
+  command=$@
+  source .env
+  docker run --rm -it -v "$(pwd):/app" -u $(id -u):$(id -g) -w /app -p$NODE_PORT:5173 node:24-alpine sh -c "npm $command"
+}
+
+exec()
+{
+  command=$@
+  docker exec -it laravel-crm-api-app sh -c "$command"
+}
+
+case "$1" in
+  help)
+    help
+    ;;
+  install)
+    install
+    ;;
+  start)
+    start
+    ;;
+  stop)
+    stop
+    ;;
+  dev)
+    dev
+    ;;
+  format)
+    format
+    ;;
+  composer)
+    composer ${@:2}
+    ;;
+  npm)
+    npm ${@:2}
+    ;;
+  php)
+    exec ${@:1}
+    ;;
+  vendor)
+    exec vendor/bin/${@:2}
+    ;;
+  test)
+    exec XDEBUG_MODE=coverage php artisan test ${@:2}
+    ;;
+  artisan)
+    exec php ${@:1}
+    ;;
+  *)
+    exec php artisan ${@:1}
+    ;;
+esac
